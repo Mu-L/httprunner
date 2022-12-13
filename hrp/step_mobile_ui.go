@@ -11,29 +11,9 @@ import (
 	"github.com/httprunner/httprunner/v4/hrp/pkg/uixt"
 )
 
-// ios setting options
-var (
-	WithUDID                       = uixt.WithUDID
-	WithWDAPort                    = uixt.WithWDAPort
-	WithWDAMjpegPort               = uixt.WithWDAMjpegPort
-	WithLogOn                      = uixt.WithLogOn
-	WithResetHomeOnStartup         = uixt.WithResetHomeOnStartup
-	WithSnapshotMaxDepth           = uixt.WithSnapshotMaxDepth
-	WithAcceptAlertButtonSelector  = uixt.WithAcceptAlertButtonSelector
-	WithDismissAlertButtonSelector = uixt.WithDismissAlertButtonSelector
-	WithPerfOptions                = uixt.WithPerfOptions
-)
-
-// android setting options
-var (
-	WithSerialNumber = uixt.WithSerialNumber
-	WithAdbIP        = uixt.WithAdbIP
-	WithAdbPort      = uixt.WithAdbPort
-	WithAdbLogOn     = uixt.WithAdbLogOn
-)
-
 type MobileStep struct {
 	Serial            string `json:"serial,omitempty" yaml:"serial,omitempty"`
+	Loops             int    `json:"loops,omitempty" yaml:"loops,omitempty"`
 	uixt.MobileAction `yaml:",inline"`
 	Actions           []uixt.MobileAction `json:"actions,omitempty" yaml:"actions,omitempty"`
 }
@@ -301,25 +281,9 @@ func (s *StepMobile) Input(text string, options ...uixt.ActionOption) *StepMobil
 	return &StepMobile{step: s.step}
 }
 
-// Times specify running times for run last action
-func (s *StepMobile) Times(n int) *StepMobile {
-	if n <= 0 {
-		log.Warn().Int("n", n).Msg("times should be positive, set to 1")
-		n = 1
-	}
-
-	mobileStep := s.mobileStep()
-	actionsTotal := len(mobileStep.Actions)
-	if actionsTotal == 0 {
-		return s
-	}
-
-	// actionsTotal >=1 && n >= 1
-	lastAction := mobileStep.Actions[actionsTotal-1 : actionsTotal][0]
-	for i := 0; i < n-1; i++ {
-		// duplicate last action n-1 times
-		mobileStep.Actions = append(mobileStep.Actions, lastAction)
-	}
+// Loop specify running times for the current step
+func (s *StepMobile) Loop(times int) *StepMobile {
+	s.mobileStep().Loops = times
 	return &StepMobile{step: s.step}
 }
 
@@ -622,20 +586,36 @@ func runStepMobileUI(s *SessionRunner, step *TStep) (stepResult *StepResult, err
 		actions = mobileStep.Actions
 	}
 
-	// run actions
-	for _, action := range actions {
-		if action.Params, err = s.caseRunner.parser.Parse(action.Params, stepVariables); err != nil {
-			if !code.IsErrorPredefined(err) {
-				err = errors.Wrap(code.ParseError,
-					fmt.Sprintf("parse action params failed: %v", err))
-			}
-			return stepResult, err
+	// run times of actions
+	loopTimes := mobileStep.Loops
+	if loopTimes < 0 {
+		log.Warn().Int("loopTimes", loopTimes).Msg("times should be positive, set to 1")
+		loopTimes = 1
+	} else if loopTimes == 0 {
+		loopTimes = 1
+	} else if loopTimes > 1 {
+		log.Info().Int("loopTimes", loopTimes).Msg("run actions with specified loop times")
+	}
+
+	// run actions with specified times
+	for i := 0; i < loopTimes; i++ {
+		if i > 0 {
+			log.Info().Int("index", i+1).Msg("start running actions in loop")
 		}
-		if err := uiDriver.DoAction(action); err != nil {
-			if !code.IsErrorPredefined(err) {
-				err = errors.Wrap(code.MobileUIDriverError, err.Error())
+		for _, action := range actions {
+			if action.Params, err = s.caseRunner.parser.Parse(action.Params, stepVariables); err != nil {
+				if !code.IsErrorPredefined(err) {
+					err = errors.Wrap(code.ParseError,
+						fmt.Sprintf("parse action params failed: %v", err))
+				}
+				return stepResult, err
 			}
-			return stepResult, err
+			if err := uiDriver.DoAction(action); err != nil {
+				if !code.IsErrorPredefined(err) {
+					err = errors.Wrap(code.MobileUIDriverError, err.Error())
+				}
+				return stepResult, err
+			}
 		}
 	}
 
